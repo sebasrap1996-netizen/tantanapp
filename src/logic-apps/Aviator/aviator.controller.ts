@@ -1,0 +1,319 @@
+import { Controller, Get, Post, Body, Param, UseGuards } from '@nestjs/common';
+import { AviatorWebSocketService } from './aviator-websocket.service';
+import { GoBetWebSocketService } from './gobet-websocket.service';
+import { AviatorGateway } from '../../gateways/aviator.gateway';
+import { AviatorService } from './aviator.service';
+import { AviatorHistoryService } from './aviator-history.service';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+
+@Controller('aviator')
+export class AviatorController {
+  constructor(
+    private readonly aviatorWebSocketService: AviatorWebSocketService,
+    private readonly gobetWebSocketService: GoBetWebSocketService,
+    private readonly aviatorGateway: AviatorGateway,
+    private readonly aviatorService: AviatorService,
+    private readonly aviatorHistoryService: AviatorHistoryService,
+  ) {}
+
+  @Get('websockets')
+  async getAllWebSockets() {
+    try {
+      const websockets = await this.aviatorService.findAll();
+      return {
+        success: true,
+        message: 'Websockets de Aviator obtenidos',
+        data: websockets.map(ws => ({
+          id: ws.id,
+          bookmakerId: ws.bookmakerId,
+          gameId: ws.gameId,
+          urlWebsocket: ws.url_websocket,
+          apiMessage: ws.api_message,
+          authMessage: ws.auth_message,
+          pingMessage: ws.ping_message,
+          statusWs: ws.status_ws,
+          isEditable: ws.is_editable,
+          createdAt: ws.created_at,
+          updatedAt: ws.updated_at,
+          bookmaker: ws.bookmaker,
+          game: ws.game,
+        })),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message || 'Error al obtener websockets',
+        data: [],
+      };
+    }
+  }
+
+  @Get('connections')
+  getConnections() {
+    try {
+      const connections = this.aviatorWebSocketService.getConnectionsStatus();
+      return {
+        success: true,
+        message: 'Estado de conexiones WebSocket',
+        data: connections,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message || 'Error al obtener estado de conexiones',
+        data: null,
+      };
+    }
+  } // <--- Agregada llave de cierre
+
+  @Get('history/:bookmakerId')
+  async getHistory(
+    @Param('bookmakerId') bookmakerId: string,
+  ) {
+    try {
+      const id = parseInt(bookmakerId);
+      const limit = 100;
+
+      const rounds = await this.aviatorHistoryService.getRecentRounds(id, limit);
+
+      return {
+        success: true,
+        message: `Últimas ${rounds.length} rondas obtenidas`,
+        data: rounds,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message || 'Error al obtener historial',
+        data: [],
+      };
+    }
+  }
+
+  @Get('connections/status')
+  getConnectionsStatus() {
+    try {
+      const connections = this.aviatorWebSocketService.getConnectionsStatus();
+      return {
+        success: true,
+        message: 'Estado de conexiones WebSocket',
+        data: connections,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message || 'Error al obtener estado de conexiones',
+        data: null,
+      };
+    }
+  }
+
+  @Post('start')
+  async startService() {
+    try {
+      // Iniciar servicio general de Aviator (888starz y otros con wss://)
+      await this.aviatorWebSocketService.initializeConnections(this.aviatorGateway.getServer());
+      
+      // Iniciar servicio específico de Gobet (ws://)
+      await this.gobetWebSocketService.initializeConnections(this.aviatorGateway.getServer());
+      
+      // Esperar un momento para que las conexiones se establezcan
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      return {
+        message: 'Servicio de Aviator iniciado correctamente (Gobet + 888starz)',
+        timestamp: new Date().toISOString(),
+        status: 'success'
+      };
+    } catch (error) {
+      return {
+        message: 'Error al iniciar el servicio de Aviator',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+        status: 'error'
+      };
+    }
+  }
+
+  @Post('test-multiplier/:bookmakerId')
+  testMultiplier(@Param('bookmakerId') bookmakerId: string) {
+    const id = parseInt(bookmakerId);
+    const testData = {
+      current_multiplier: Math.random() * 10 + 1, // Multiplicador aleatorio entre 1-11
+    };
+    
+    this.aviatorGateway.emitMultiplier(id, testData);
+    
+    return {
+      message: 'Datos de prueba enviados',
+      bookmakerId: id,
+      data: testData,
+    };
+  }
+
+  @Post('test-round/:bookmakerId')
+  testRound(@Param('bookmakerId') bookmakerId: string) {
+    const id = parseInt(bookmakerId);
+    const testData = {
+      online_players: Math.floor(Math.random() * 100) + 10,
+      bets_count: Math.floor(Math.random() * 50) + 5,
+      total_bet_amount: Math.random() * 10000 + 1000,
+      total_cashout: Math.random() * 5000 + 500,
+      current_multiplier: Math.random() * 10 + 1,
+      max_multiplier: Math.random() * 15 + 1,
+      game_state: 'Run' as const,
+      round_id: `test-${Date.now()}`,
+      casino_profit: Math.random() * 2000 + 100,
+    };
+    
+    this.aviatorGateway.emitRoundData(id, testData);
+    
+    return {
+      message: 'Datos de ronda de prueba enviados',
+      bookmakerId: id,
+      data: testData,
+    };
+  }
+
+  @Get('bookmaker/:bookmakerId')
+  async getBookmakerInfo(@Param('bookmakerId') bookmakerId: string) {
+    try {
+      const id = parseInt(bookmakerId);
+      const aviatorWs = await this.aviatorService.findByBookmakerId(id);
+      
+      if (!aviatorWs) {
+        return {
+          success: false,
+          message: 'Aviator WebSocket no encontrado para este bookmaker',
+        };
+      }
+
+              return {
+          success: true,
+          data: {
+            id: aviatorWs.id,
+            bookmakerId: aviatorWs.bookmakerId,
+            gameId: aviatorWs.gameId,
+            urlWebsocket: aviatorWs.url_websocket,
+            apiMessage: aviatorWs.api_message,
+            authMessage: aviatorWs.auth_message,
+            pingMessage: aviatorWs.ping_message,
+            statusWs: aviatorWs.status_ws,
+            createdAt: aviatorWs.created_at,
+            updatedAt: aviatorWs.updated_at,
+            bookmaker: aviatorWs.bookmaker,
+            game: aviatorWs.game,
+          },
+        };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message || 'Error al obtener información del bookmaker',
+      };
+    }
+  }
+
+  @Post('bookmaker/:bookmakerId/websocket-url')
+  async updateWebSocketUrl(
+    @Param('bookmakerId') bookmakerId: string,
+    @Body() body: { url: string },
+  ) {
+    try {
+      const id = parseInt(bookmakerId);
+      const updated = await this.aviatorService.updateWebSocketUrl(id, body.url);
+      
+      return {
+        success: true,
+        message: 'URL WebSocket actualizada correctamente',
+        data: {
+          id: updated.id,
+          bookmakerId: updated.bookmakerId,
+          urlWebsocket: updated.url_websocket,
+        },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message || 'Error al actualizar la URL WebSocket',
+      };
+    }
+  }
+
+  @Post('bookmaker/:bookmakerId/auth-message')
+  async updateAuthMessage(
+    @Param('bookmakerId') bookmakerId: string,
+    @Body() body: { authMessage: string },
+  ) {
+    try {
+      const id = parseInt(bookmakerId);
+      const updated = await this.aviatorService.updateAuthMessage(id, body.authMessage);
+      
+      return {
+        success: true,
+        message: 'Mensaje de autenticación actualizado correctamente',
+        data: {
+          id: updated.id,
+          bookmakerId: updated.bookmakerId,
+          authMessage: updated.auth_message,
+        },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message || 'Error al actualizar el mensaje de autenticación',
+      };
+    }
+  }
+
+  @Post('bookmaker/:bookmakerId/status')
+  async updateWebSocketStatus(
+    @Param('bookmakerId') bookmakerId: string,
+    @Body() body: { status: string },
+  ) {
+    try {
+      const id = parseInt(bookmakerId);
+      const updated = await this.aviatorService.updateWebSocketStatus(id, body.status);
+      
+      return {
+        success: true,
+        message: 'Estado del WebSocket actualizado correctamente',
+        data: {
+          id: updated.id,
+          bookmakerId: updated.bookmakerId,
+          statusWs: updated.status_ws,
+        },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message || 'Error al actualizar el estado del WebSocket',
+      };
+    }
+  }
+
+  @Post('websocket/:id/auth-message')
+  async updateAuthMessageById(
+    @Param('id') id: string,
+    @Body() body: { authMessage: string },
+  ) {
+    try {
+      const wsId = parseInt(id);
+      const updated = await this.aviatorService.updateAuthMessageById(wsId, body.authMessage);
+      
+      return {
+        success: true,
+        message: 'Mensaje de autenticación actualizado correctamente',
+        data: {
+          id: updated.id,
+          bookmakerId: updated.bookmakerId,
+          authMessage: updated.auth_message,
+        },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message || 'Error al actualizar el mensaje de autenticación',
+      };
+    }
+  }
+}
