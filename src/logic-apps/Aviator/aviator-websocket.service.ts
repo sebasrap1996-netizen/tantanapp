@@ -33,13 +33,6 @@ interface BookmakerWithConfig extends Bookmaker {
   api_message: string;
   auth_message: string;
   ping_message: string;
-  nombre?: string; // Campo opcional para compatibilidad
-  // Campos para tokens dinámicos
-  use_dynamic_tokens?: boolean;
-  api_token?: string | null;
-  session_token?: string | null;
-  player_id?: string | null;
-  game_zone?: string | null;
 }
 
 @Injectable()
@@ -213,66 +206,6 @@ export class AviatorWebSocketService {
       });
   }
 
-  private buildAuthMessageWithToken(sessionToken: string, originalAuthMessage: string): string {
-    try {
-      // Decodificar el auth_message original para ver su estructura
-      const decodedOriginal = Buffer.from(originalAuthMessage, 'base64');
-      const decodedObj = decodeMessage(decodedOriginal);
-      
-      console.log(`🔍 [AUTH] Auth message original:`, decodedObj);
-      
-      // Reemplazar el sessionToken con el token del handshake
-      if (decodedObj && decodedObj.p && decodedObj.p.p && decodedObj.p.p.sessionToken) {
-        decodedObj.p.p.sessionToken = sessionToken;
-        console.log(`🔧 [AUTH] sessionToken actualizado: ${sessionToken}`);
-        
-        // También actualizar el token principal si existe
-        if (decodedObj.p.p.token) {
-          decodedObj.p.p.token = sessionToken;
-          console.log(`🔧 [AUTH] token actualizado: ${sessionToken}`);
-        }
-        
-        // Recodificar el mensaje a binario y luego a base64
-        // Por ahora, necesitamos crear un nuevo mensaje manualmente
-        const newAuthMessage = this.createAuthMessage(sessionToken);
-        console.log(`🔧 [AUTH] Nuevo auth_message creado con token del handshake`);
-        return newAuthMessage;
-      }
-      
-      return originalAuthMessage;
-      
-    } catch (error) {
-      console.error(`❌ [AUTH] Error construyendo auth_message con token:`, error);
-      return originalAuthMessage;
-    }
-  }
-
-  private createAuthMessage(sessionToken: string): string {
-    // Crear un auth_message simple con el token del handshake
-    const authObj = {
-      c: 0,
-      a: 1,
-      p: {
-        zn: 'aviator_core_inst7',
-        un: '753098107&&1xslot',
-        pw: '',
-        p: {
-          token: sessionToken,
-          sessionToken: sessionToken,
-          currency: 'COP',
-          lang: 'es',
-          platform: { id: 1 },
-          version: 'v4.2.106-hotfix'
-        }
-      }
-    };
-    
-    // Convertir a string y luego a base64 (simplificado)
-    // NOTA: Esto debería ser codificado binariamente, pero es una solución temporal
-    const authString = JSON.stringify(authObj);
-    return Buffer.from(authString).toString('base64');
-  }
-
   private connectToBookmaker(bookmaker: BookmakerWithConfig, io: any, retryCount: number): void {
     const { id, bookmaker: name, url_websocket, api_message, auth_message, ping_message } = bookmaker;
     
@@ -374,18 +307,6 @@ export class AviatorWebSocketService {
               console.log(`📤 [LEGACY] Enviando auth_message en base64 para bookmaker ${id}`);
               ws.send(Buffer.from(auth_message, 'base64'));
               (ws as any).firstResponseReceived = true;
-            }
-
-            // GUARDAR TOKENS de la respuesta de autenticación
-            if (decodedMessage.a === 1 && decodedMessage.c === 0 && decodedMessage.p) {
-              if (decodedMessage.p.token || decodedMessage.p.sessionToken) {
-                (ws as any).authToken = decodedMessage.p.token;
-                (ws as any).sessionToken = decodedMessage.p.sessionToken;
-                console.log(`🔑 [TOKEN] Tokens guardados para bookmaker ${id}`);
-                console.log(`✅ [AUTH] Autenticación EXITOSA para bookmaker ${id}`);
-              } else if (decodedMessage.p.ep && decodedMessage.p.ec === 28) {
-                console.error(`❌ [AUTH] Autenticación FALLIDA para bookmaker ${id} - Error code 28`);
-              }
             }
 
             obj = decodedMessage;
@@ -658,7 +579,7 @@ export class AviatorWebSocketService {
     this.updateWebSocketStatusInDB(bookmaker.id, 'CONNECTING');
 
     if (retryCount >= this.maxRetries) {
-      this.logger.error(`ACTUALIZA TU TOKEN para bookmaker ${bookmaker.id}. Máximo de intentos (${this.maxRetries}) alcanzado.`);
+      this.logger.error(`Error de conexión para bookmaker ${bookmaker.id}. Máximo de intentos (${this.maxRetries}) alcanzado. Verifica auth_message y ping_message.`);
       // En lugar de parar completamente, intentar reconectar después de 5 minutos
       setTimeout(() => {
         this.logger.log(`Reintentando conexión para bookmaker ${bookmaker.id} después de timeout`);
