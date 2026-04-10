@@ -186,23 +186,29 @@ export class AviatorWebSocketService {
   }
 
   private async getBookmakersWithConfigs(): Promise<BookmakerWithConfig[]> {
+    // Leer configuración de aviator_ws (donde el frontend guarda los datos)
+    const aviatorWsList = await this.aviatorWsRepository.find();
+
+    // Obtener los bookmakers correspondientes
     const bookmakers = await this.bookmakerRepository.find({
       where: { 
         isActive: true,
-        gameId: 1 // Aviator game ID
+        gameId: 1
       }
     });
 
-    // Usar los campos del bookmaker configurados manualmente por el administrador
-    return bookmakers
-      .filter(bm => bm.urlWebsocket && bm.urlWebsocket.startsWith('wss://'))
-      .map(bm => {
+    // Combinar datos de aviator_ws con bookmakers
+    return aviatorWsList
+      .filter(ws => ws.url_websocket && ws.url_websocket.startsWith('wss://'))
+      .map(ws => {
+        const bookmaker = bookmakers.find(b => b.id === ws.bookmakerId);
         return {
-          ...bm,
-          url_websocket: bm.urlWebsocket,
-          api_message: bm.apiMessage || '',
-          auth_message: bm.authMessage || '',
-          ping_message: bm.pingMessage || '',
+          id: ws.bookmakerId,
+          bookmaker: bookmaker?.bookmaker || 'Unknown',
+          url_websocket: ws.url_websocket,
+          api_message: ws.api_message || '',
+          auth_message: ws.auth_message || '',
+          ping_message: ws.ping_message || '',
         } as BookmakerWithConfig;
       });
   }
